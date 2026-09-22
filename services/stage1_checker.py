@@ -1,96 +1,78 @@
+import datetime
 from typing import List
 from services.base_checker import BaseStageChecker
 from utils import is_date_cell, normalize_for_compare
 
+
 class Stage1Checker(BaseStageChecker):
-    """ステージ1: データ型 判定チェッカー"""
+    """ステージ1: データ型（日付・文字列・数値） 判定チェッカー
+    
+    対象セル範囲: B9 〜 D9
+    - B9: 日付（例: 2026/09/01 など日付形式であること）
+    - C9: 品目（文字列）
+    - D9: 金額（数値、「円」などの文字列や全角数字の混入をチェック）
+    """
+
+    TARGET_CELLS = {"B9", "C9", "D9"}
 
     def check_cell(self, cell, val: str) -> List[str]:
-        """セル単位の判定: 数値セルに「円」が直接入力されていないかを検証"""
+        """セル単位の判定: 指定範囲（B9〜D9）のみをチェック"""
         errors = []
+        coord = cell.coordinate.upper()
 
-        # 数値セル（数式以外）に直接「円」が文字として入力されているかチェック
-        if "円" in val and not val.startswith("="):
-            errors.append(
-                f"セル {cell.coordinate}: ⚠️値に「円」が直接入力されています。"
-                f"数値の後ろに単位をつけたい場合は『セルの書式設定』を使いましょう。"
-            )
+        # B9, C9, D9 以外はスキップ
+        if coord not in self.TARGET_CELLS:
+            return errors
+
+        # 未入力（空欄）チェック
+        if cell.value is None or str(cell.value).strip() == "":
+            errors.append(f"セル {coord}: ⚠️値が未入力です。")
+            return errors
+
+        norm_val = normalize_for_compare(val)
+
+        # --- B9 セル: 日付型チェック ---
+        if coord == "B9":
+            if not is_date_cell(cell):
+                errors.append(
+                    f"セル {coord}: ⚠️「日付」として認識されていません。"
+                    "「2026/9/1」のようにスラッシュ区切りで入力してください。"
+                )
+
+        # --- C9 セル: 品目（文字列）チェック ---
+        elif coord == "C9":
+            # 数値のみで入力されている場合は注意
+            if isinstance(cell.value, (int, float)) or (val.isdigit() and norm_val.isdigit()):
+                errors.append(
+                    f"セル {coord}: ⚠️品目（文字列）欄に数値のみが入力されています。"
+                    "「食費」や「日用品」などのテキストを入力してください。"
+                )
+
+        # --- D9 セル: 金額（数値型）チェック ---
+        elif coord == "D9":
+            # 1. 「1000円」のように「円」が文字列として直接入力されている場合
+            if "円" in val:
+                errors.append(
+                    f"セル {coord}: ⚠️金額に「円」が直接入力されています。"
+                    "数値のみを入力し、単位は表示形式で設定しましょう。"
+                )
+
+            # 2. 文字列型として入力されている場合（例: `'1500` や全角数字）
+            elif isinstance(cell.value, str):
+                errors.append(
+                    f"セル {coord}: ⚠️金額が「文字列型」として入力されています。"
+                    "半角数値のみを入力してください。"
+                )
 
         return errors
 
     def check_sheet(self) -> List[str]:
-        """シート単位の判定: answer_keys テーブルから正解のデータ型を取得して検証"""
+        """シート単位の判定: 必須セル（B9〜D9）の未入力がないか一括確認"""
         errors = []
-        type_labels = {
-            "n": "数値",
-            "s": "文字列",
-            "d": "日付",
-            "b": "真偽値",
-            "f": "数式",
-        }
 
-        # 1. Supabaseからステージ1の型チェックキーを取得
-        try:
-            response = (
-                self.supabase.table("answer_keys")
-                .select("*")
-                .eq("stage_id", 1)
-                .execute()
-            )
-            type_keys = [
-                k for k in (response.data or []) if k.get("expected_type")
-            ]
-        except Exception as e:
-            return [
-                f"【注意】型チェック用データの取得に失敗しました（{e}）。管理者に確認してください。"
-            ]
-
-        # 2. 各対象セルのデータ型チェック
-        for key in type_keys:
-            cell_ref = key.get("cell")
-            expected_type = key.get("expected_type")
-
-            try:
-                cell = self.ws[cell_ref]
-            except Exception:
-                errors.append(
-                    f"⚠️セル指定「{cell_ref}」が不正なため確認できませんでした。"
-                )
-                continue
-
-            actual_type = cell.data_type
-            cell_val_str = (
-                str(cell.value) if cell.value is not None else ""
-            )
-
-            # 日付型の判定（utils.py の is_date_cell を利用）
-            if expected_type == "d" and is_date_cell(cell):
-                continue
-
-            # 型が異なる場合の処理
-            if actual_type != expected_type:
-                # 数値型期待で文字列扱いに「円」が含まれている場合は check_cell 側で警告を出すためスキップ
-                if (
-                    expected_type == "n"
-                    and actual_type == "s"
-                    and "円" in cell_val_str
-                ):
-                    continue
-
-                expected_label = type_labels.get(
-                    expected_type, expected_type
-                )
-
-                # 初心者向けのアドバイスメッセージ生成
-                guidance = ""
-                if expected_type == "n" and actual_type == "s":
-                    guidance = "数字の前にアポストロフィ（'）が付いていないか確認しましょう。"
-                elif expected_type == "d" and actual_type == "s":
-                    guidance = "「2026/9/8」のようにスラッシュ区切りで入力すると自動的に日付として認識されます。"
-
-                errors.append(
-                    f"セル {cell_ref}: ⚠️{expected_label}を入力してほしいところですが、"
-                    f"セルが左寄せ（文字列扱い）になっています。{guidance}"
-                )
+        for coord in ["B9", "C9", "D9"]:
+            cell = self.ws[coord]
+            if cell.value is None or str(cell.value).strip() == "":
+                errors.append(f"セル {coord}: ⚠️課題入力欄が空欄になっています。")
 
         return errors
