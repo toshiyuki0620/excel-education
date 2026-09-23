@@ -22,7 +22,7 @@ class Stage3Checker(BaseStageChecker):
         """セル単位の判定: 指定範囲（E10:F15）のみをチェック"""
         errors = []
 
-        # 1. 結合セル（MergedCell）の場合は属性アクセスエラーを防ぐため即座にスキップ
+        # 1. 結合セル（MergedCell）の場合は属性アクセスエラー防止のため即座にスキップ
         if isinstance(cell, MergedCell):
             return errors
 
@@ -64,13 +64,13 @@ class Stage3Checker(BaseStageChecker):
 
             # F列（税込合計）: D4 に対する絶対参照（$D$4）チェック
             elif col_letter == "F":
-                # 消費税率（0.1）を直接ベタ打ちしている場合（例: =E10*1.1 や =E10*(1+0.1)）
+                # (a) 消費税率（0.1）を直接ベタ打ちしている場合（例: =E10*1.1 や =E10*(1+0.1)）
                 if re.search(r"1\.1|0\.1", upper_val):
                     errors.append(
                         f"セル {coord}: ⚠️消費税率を数式内に直接数値（0.1 や 1.1）で入力しています。"
                         "税率セル「D4」を絶対参照（$D$4）で参照しましょう。"
                     )
-                # D4 への参照はあるが $ マークが付いていない場合（例: =E10*(1+D4)）
+                # (b) D4 への参照はあるが $ マークが付いていない場合（例: =E10*(1+D4)）
                 elif "D4" in upper_val and "$D$4" not in upper_val and "D$4" not in upper_val:
                     errors.append(
                         f"セル {coord}: ⚠️消費税率セル「D4」に絶対参照記号（$）が付いていません（例: $D$4）。"

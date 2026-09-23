@@ -1,34 +1,47 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
-from openpyxl.worksheet.worksheet import Worksheet
-from supabase import Client
-from config import supabase as default_supabase
+from typing import List
+from openpyxl.cell.cell import MergedCell
 
 
 class BaseStageChecker(ABC):
-    """各ステージの判定ロジック用抽象基底クラス"""
+    """全ステージチェッカーの基底クラス"""
 
-    def __init__(
-        self,
-        ws: Worksheet,
-        file_stream,
-        supabase_client: Optional[Client] = None,
-    ):
+    def __init__(self, ws, file_stream=None):
         self.ws = ws
         self.file_stream = file_stream
-        # 引数で渡されなければ config.py のクライアントを使用（依存性の注入）
-        self.supabase = supabase_client or default_supabase
 
     @abstractmethod
     def check_cell(self, cell, val: str) -> List[str]:
-        """セル単位の判定処理。
-        エラーメッセージまたは検出ログのリストを返す。
-        （サブクラスで実装必須）
-        """
+        """各セル単位のチェック（子クラスで実装）"""
         pass
 
+    @abstractmethod
     def check_sheet(self) -> List[str]:
-        """シート/ファイル全体の判定処理。
-        デフォルトでは何も実行しない（必要なステージのみオーバーライドする）。
-        """
-        return []
+        """シート・ファイル全体単位のチェック（子クラスで実装）"""
+        pass
+
+    def run_check(self) -> List[str]:
+        """全セルのチェックを実行する共通エントリーポイント"""
+        errors = []
+
+        # 1. シート全体のセル走査
+        for row in self.ws.iter_rows():
+            for cell in row:
+                # ★共通ガード: 結合セル（MergedCell）はチェック対象外としてスキップ
+                if isinstance(cell, MergedCell):
+                    continue
+
+                # 値が存在する場合のみ文字列化して渡す（None対策）
+                val = str(cell.value) if cell.value is not None else ""
+                
+                # 安全な cell のみを各チェッカーの check_cell に渡す
+                cell_errors = self.check_cell(cell, val)
+                if cell_errors:
+                    errors.extend(cell_errors)
+
+        # 2. シート単位のチェック実行
+        sheet_errors = self.check_sheet()
+        if sheet_errors:
+            errors.extend(sheet_errors)
+
+        return errors

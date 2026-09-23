@@ -1,30 +1,37 @@
 import datetime
 from typing import List
+from openpyxl.cell.cell import MergedCell
 from services.base_checker import BaseStageChecker
 from utils import is_date_cell, normalize_for_compare
 
 
 class Stage1Checker(BaseStageChecker):
     """ステージ1: データ型（日付・文字列・数値） 判定チェッカー
-    
+
     対象セル範囲: B9 〜 D9
     - B9: 日付（例: 2026/09/01 など日付形式であること）
     - C9: 品目（文字列）
     - D9: 金額（数値、「円」などの文字列や全角数字の混入をチェック）
     """
 
+    # チェック対象のセル番地（課題1の入力欄）
     TARGET_CELLS = {"B9", "C9", "D9"}
 
     def check_cell(self, cell, val: str) -> List[str]:
         """セル単位の判定: 指定範囲（B9〜D9）のみをチェック"""
         errors = []
+
+        # 1. 結合セル（MergedCell）は属性アクセスエラー防止のため即座にスキップ
+        if isinstance(cell, MergedCell):
+            return errors
+
         coord = cell.coordinate.upper()
 
-        # B9, C9, D9 以外はスキップ
+        # 2. B9, C9, D9 以外のセルはスキップ
         if coord not in self.TARGET_CELLS:
             return errors
 
-        # 未入力（空欄）チェック
+        # 3. 未入力（空欄）チェック
         if cell.value is None or str(cell.value).strip() == "":
             errors.append(f"セル {coord}: ⚠️値が未入力です。")
             return errors
@@ -50,14 +57,14 @@ class Stage1Checker(BaseStageChecker):
 
         # --- D9 セル: 金額（数値型）チェック ---
         elif coord == "D9":
-            # 1. 「1000円」のように「円」が文字列として直接入力されている場合
+            # (a) 「1000円」のように「円」が文字列として直接入力されている場合
             if "円" in val:
                 errors.append(
                     f"セル {coord}: ⚠️金額に「円」が直接入力されています。"
                     "数値のみを入力し、単位は表示形式で設定しましょう。"
                 )
 
-            # 2. 文字列型として入力されている場合（例: `'1500` や全角数字）
+            # (b) 文字列型として入力されている場合（例: `'1500` や全角数字）
             elif isinstance(cell.value, str):
                 errors.append(
                     f"セル {coord}: ⚠️金額が「文字列型」として入力されています。"
@@ -72,6 +79,11 @@ class Stage1Checker(BaseStageChecker):
 
         for coord in ["B9", "C9", "D9"]:
             cell = self.ws[coord]
+
+            # 結合セルならチェック不要
+            if isinstance(cell, MergedCell):
+                continue
+
             if cell.value is None or str(cell.value).strip() == "":
                 errors.append(f"セル {coord}: ⚠️課題入力欄が空欄になっています。")
 

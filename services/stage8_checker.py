@@ -1,57 +1,67 @@
-import re
 from typing import List
+from openpyxl.cell.cell import MergedCell
 from services.base_checker import BaseStageChecker
 
 
 class Stage8Checker(BaseStageChecker):
-    """ステージ8: 総合演習（実務レベルのデータ処理・ダッシュボード作成） 判定チェッカー"""
+    """ステージ8: 総合演習（エラー制御・ダッシュボード構築） 判定チェッカー
+
+    - シート内の数式エラー（#REF!, #VALUE!, #N/A, #DIV/0! 等）の残存検知
+    - IFERROR 関数によるエラー制御（マスク処理）の利用有無チェック
+    """
+
+    # Excel の一般的なエラー値のリスト
+    EXCEL_ERRORS = ["#REF!", "#VALUE!", "#N/A", "#DIV/0!", "#NAME?", "#NUM!", "#NULL!"]
 
     def check_cell(self, cell, val: str) -> List[str]:
-        """セル単位の判定: 数式エラーの残存や複雑な複合関数の入力不備を検証"""
+        """セル単位の判定ロジック"""
         errors = []
-        upper_val = val.upper().replace(" ", "")
 
-        # 1. シート全体の エラー値 残存チェック
-        for err_code in ["#N/A", "#VALUE!", "#REF!", "#DIV/0!", "#NAME?"]:
-            if err_code in val:
-                errors.append(
-                    f"セル {cell.coordinate}: ⚠️計算エラー（{err_code}）が発生しています。"
-                    "IFERROR関数で囲むか、参照先の入力データを見直してください。"
-                )
-                return errors
-
-        if not upper_val.startswith("="):
+        if isinstance(cell, MergedCell):
             return errors
 
-        # 2. 複合関数のネストチェック (例: IFERROR(VLOOKUP(...), "未登録") )
-        if "VLOOKUP(" in upper_val and "IFERROR(" not in upper_val:
-            # 総合演習ではエラーハンドリング（IFERROR）の併用を推奨する例
+        if cell.value is None:
+            return errors
+
+        str_val = str(cell.value).strip()
+        upper_val = str_val.upper()
+        coord = cell.coordinate.upper()
+
+        # 1. 数式結果またはセル値に数式エラーが残っていないか検知
+        for err in self.EXCEL_ERRORS:
+            if err in upper_val:
+                errors.append(
+                    f"セル {coord}: ⚠️計算エラー（{err}）が発生しています。"
+                    "数式や参照先のセルを見直すか、IFERROR関数でエラー処理を行いましょう。"
+                )
+                break
+
+        # 2. VLOOKUP などでエラーが出やすい箇所に IFERROR が組み込まれているかのアドバイス
+        if upper_val.startswith("=") and "VLOOKUP(" in upper_val and "IFERROR(" not in upper_val:
             errors.append(
-                f"セル {cell.coordinate}: 💡ヒント: VLOOKUP関数を IFERROR関数 と組み合わせると、該当データがない場合のエラー表示をきれいに防げます。"
+                f"セル {coord}: 💡VLOOKUP関数が単体で使用されています。"
+                "データが見つからない場合のエラー表示を防ぐため、IFERROR関数（例: =IFERROR(VLOOKUP(...), \"\")）を組み合わせるとより実践的です。"
             )
 
         return errors
 
     def check_sheet(self) -> List[str]:
-        """シート単位の判定: 総合課題としての完成度（複数シート連携、最終集計セルの確認）を検証"""
+        """シート単位の判定ロジック（エラーセルの総数カウント）"""
         errors = []
+        error_count = 0
 
-        # 1. ワークブック全体のシート数チェック（データシート・集計シートの分離）
-        wb = self.ws.parent
-        if len(wb.worksheets) < 2:
+        for row in self.ws.iter_rows():
+            for cell in row:
+                if isinstance(cell, MergedCell):
+                    continue
+                if cell.value:
+                    u_val = str(cell.value).upper()
+                    if any(err in u_val for err in self.EXCEL_ERRORS):
+                        error_count += 1
+
+        if error_count > 0:
             errors.append(
-                "⚠️ワークシートが1枚しかありません。"
-                "「売上データ」と「分析ダッシュボード」のように目的別にシートを分けて構成しましょう。"
+                f"⚠️シート全体で {error_count} 個のエラーセル（#N/A や #REF! など）が残っています。"
             )
-
-        # 2. 最終集計セル（例: B3セル）の確認
-        try:
-            summary_val = str(self.ws["B3"].value or "").strip()
-            if not summary_val.startswith("="):
-                errors.append(
-                    "セル B3（総合売上集計）: ⚠️最終集計値が数式で計算されていません。"
-                )
-        except Exception:
-            pass
 
         return errors

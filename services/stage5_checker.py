@@ -1,58 +1,74 @@
 import re
 from typing import List
+from openpyxl.cell.cell import MergedCell
 from services.base_checker import BaseStageChecker
 
 
 class Stage5Checker(BaseStageChecker):
-    """ステージ5: データ整形（テーブル・フィルタ・条件付き書式） 判定チェッカー"""
+    """ステージ5: データ整形・テーブル・フィルター連動 判定チェッカー
+
+    - Excelテーブル機能（ws.tables）の作成有無チェック
+    - SUBTOTAL 関数（または AGGREGATE 関数）の使用チェック
+    - SUBTOTAL 関数の第1引数（集計機能番号: 9/109 など）の検証
+    """
 
     def check_cell(self, cell, val: str) -> List[str]:
-        """セル単位の判定: ステージ5はシート全体の設定確認が主のため、セル個別チェックはなし"""
-        return []
-
-    def check_sheet(self) -> List[str]:
-        """シート単位の判定: テーブル化、オートフィルタ、条件付き書式の設定有無を検証"""
+        """セル単位の判定ロジック"""
         errors = []
 
-        # 1. テーブル化（openpyxl.worksheet.worksheet.Worksheet.tables）のチェック
-        if not self.ws.tables:
-            errors.append(
-                "⚠️テーブル化（Ctrl+T）が行われていません。"
-                "表全体（B10:F25）を選択して「挿入」→「テーブル」で設定しましょう。"
-            )
-        else:
-            # テーブルの指定範囲が適切かどうかの確認
-            for tbl in self.ws.tables.values():
-                ref = tbl.ref  # 例: "B10:F25"
-                match_tbl = re.match(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", ref)
-                if match_tbl:
-                    _, start_row, _, end_row = match_tbl.groups()
-                    if int(start_row) > 10 or int(end_row) < 20:
-                        errors.append(
-                            f"⚠️テーブルの範囲（{ref}）が在庫データ全体を含んでいない可能性があります。"
-                            f"ヘッダー行（10行目）から全データ行（25行目）を含めて設定しましょう。"
-                        )
+        # 1. 結合セル（MergedCell）は属性アクセスエラー防止のためスキップ
+        if isinstance(cell, MergedCell):
+            return errors
 
-        # 2. オートフィルタのチェック
-        # （シート直下の auto_filter または テーブル内の autoFilter を確認）
-        has_filter = bool(self.ws.auto_filter.ref) or any(
-            table.autoFilter and table.autoFilter.ref
-            for table in self.ws.tables.values()
-        )
-        if not has_filter:
+        # 2. 空セルまたは数式でないセルはスキップ
+        if cell.value is None or not str(cell.value).strip().startswith("="):
+            return errors
+
+        raw_val = str(cell.value).strip()
+        upper_val = raw_val.upper().replace(" ", "").replace(" ", "")
+        coord = cell.coordinate.upper()
+
+        # SUBTOTAL 関数が使われている場合の詳細検証
+        if "SUBTOTAL(" in upper_val:
+            # SUBTOTAL(機能番号, 参照範囲) の第1引数をチェック
+            match = re.search(r"SUBTOTAL\(([^,]+),", upper_val)
+            if match:
+                func_num = match.group(1).strip()
+                # 9 (SUM: 非表示行含む) または 109 (SUM: 手動非表示行無視)
+                if func_num not in ["9", "109", "1", "101"]:
+                    errors.append(
+                        f"セル {coord}: 💡SUBTOTAL関数の第1引数（集計方法）に「{func_num}」が指定されています。"
+                        "合計の計算には「9」または「109」を使用するのが一般的です。"
+                    )
+
+        return errors
+
+    def check_sheet(self) -> List[str]:
+        """シート単位の判定ロジック（テーブル機能や特定関数の設定状況）"""
+        errors = []
+
+        # 1. シート内に Excel テーブルオブジェクトが定義されているかチェック
+        # openpyxl では ws.tables に定義済みのテーブルが格納されます
+        if not self.ws.tables or len(self.ws.tables) == 0:
             errors.append(
-                "⚠️フィルタが設定されていません。"
-                "テーブル化するとフィルタは自動で付きます。テーブル化を先に確認しましょう。"
+                "⚠️ワークシート内に「Excelテーブル」が設定されていません。[挿入] ＞ [テーブル] からテーブル化しましょう。"
             )
 
-        # 3. 条件付き書式のチェック
-        if not any(
-            cf_range.rules for cf_range in self.ws.conditional_formatting
-        ):
+        # 2. SUBTOTAL 関数がどこかに使用されているかチェック
+        has_subtotal = False
+        for row in self.ws.iter_rows():
+            for cell in row:
+                if isinstance(cell, MergedCell):
+                    continue
+                if cell.value and "SUBTOTAL(" in str(cell.value).upper():
+                    has_subtotal = True
+                    break
+            if has_subtotal:
+                break
+
+        if not has_subtotal:
             errors.append(
-                "⚠️条件付き書式が設定されていません。"
-                "「ホーム」→「条件付き書式」→「新しいルール」で在庫切れ（在庫数≦発注点）の"
-                "行をオレンジ色にハイライトしましょう。"
+                "⚠️フィルター連動集計用の「SUBTOTAL 関数」が見つかりませんでした。"
             )
 
         return errors
