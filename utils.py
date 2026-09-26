@@ -18,7 +18,7 @@ def normalize_for_compare(val: Optional[str]) -> str:
 
     # 全角英数字・記号を半角に変換
     zenkaku = "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ＝＋－＊／（），％"
-    hankaku = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ=-*/(),%"
+    hankaku = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ=+-*/(),%"
     trans_table = str.maketrans(zenkaku, hankaku)
     s = s.translate(trans_table)
 
